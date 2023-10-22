@@ -1,0 +1,321 @@
+# ################################
+# Model: seq2seq scoring on speechocean762 using MFCC with CRDNN + CTC/Attention
+# Authors:
+# * Ahmed Zahran 2022
+# Adapted from code by:
+# * Mirco Ravanelli 2020
+# * Ju-Chieh Chou 2020
+# * Abdel Heba 2020
+# ################################
+
+# Seed needs to be set at top of yaml, before objects with parameters are made
+seed: 1234
+__set_seed: !apply:torch.manual_seed [!ref <seed>]
+pretrained_model_folder: !PLACEHOLDER  # e.g.: results/CRDNN_MFCC_SO762_AP_APR/1234/
+exp_folder: !PLACEHOLDER  # Experiment folder
+output_folder: !ref <exp_folder>/<seed>
+scoring_dist_file: !ref <output_folder>/scoring_dist.txt
+save_folder: !ref <output_folder>/save
+best_model_folder: !ref <save_folder>/best
+train_log: !ref <output_folder>/train_log.txt
+
+# Data files
+data_folder: !PLACEHOLDER  # e.g. /path/to/speechocean762
+train_annotation: !ref <output_folder>/train.json
+valid_annotation: !ref <output_folder>/dev.json
+test_annotation: !ref <output_folder>/test.json
+skip_prep: False # Skip data preparation
+label_encoder_path: null
+
+# Experiment metadata and result files
+exp_id: -1  # This will be replaced by the experiment ID.
+pretrained_model_exp_id: -1 # This will be replaced by the pretrained model ID.
+exp_description: ""
+exp_metadata_file: !PLACEHOLDER
+results_file: !PLACEHOLDER
+epoch_results_dir: !PLACEHOLDER
+params_dir: !PLACEHOLDER
+
+# Training parameters
+device: cpu
+training_type: "fine_tuning"
+model_type: "feat_based"
+model_task: "scoring"
+noisy_phones_utt_per_original_utt: 0
+dataset_name: "speechocean762"
+multi_task_pretrained_model: False
+hpopt_mode: null
+optimizing_hps: False
+multi_task: False
+query_assisted: False
+train_split_ratio: 1.0
+number_of_epochs: 50
+batch_size: 4 # Used if dynamic_batching is False
+lr: 0.0003
+lr_scorer: 0.0003
+ctc_weight: 0.2
+pcc_weight: 0.5
+sorting: ascending
+auto_mix_prec: False
+sample_rate: 16000
+n_fft: 400
+n_mels: 40
+
+# Model parameters
+activation: !name:torch.nn.LeakyReLU
+dropout: 0.15
+cnn_blocks: 2
+cnn_channels: (128, 256)
+cnn_kernelsize: (3, 3)
+rnn_layers: 4
+rnn_neurons: 512
+rnn_bidirectional: True
+dnn_blocks: 2
+dnn_neurons: 512
+emb_size: 128
+dec_neurons: 256
+dec_scorer_neurons: !ref <dec_neurons>
+scorer_dnn_blocks: 1
+scorer_dnn_neurons: 256
+scorer_similarity_dnn_blocks: 1
+scorer_similarity_dnn_neurons: 256
+similarity_calc: "cosine"  # The type of similarity computation to use. Allowable values: "cosine", "euclidean", "nn".
+
+# Outputs
+num_phones: 43
+output_neurons: 43 # 39phs+sil+blank+eos+bos
+bos_index: 0
+eos_index: 1
+blank_index: 2
+
+# Decoding parameters
+min_decode_ratio: 0.0
+max_decode_ratio: 1.0
+beam_size: 16
+
+# Optimization
+ckpt_enable: true
+trial_id: None
+
+# Dataloader options
+train_dataloader_opts:
+    batch_size: !ref <batch_size>
+
+valid_dataloader_opts:
+    batch_size: !ref <batch_size>
+
+test_dataloader_opts:
+    batch_size: !ref <batch_size>
+
+augmentation: !new:speechbrain.lobes.augment.TimeDomainSpecAugment
+    sample_rate: !ref <sample_rate>
+    speeds: [95, 100, 105]
+
+normalize: !new:speechbrain.processing.features.InputNormalization
+    norm_type: global
+
+epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
+    limit: !ref <number_of_epochs>
+
+feat_extractor: !new:speechbrain.lobes.features.Fbank
+    sample_rate: !ref <sample_rate>
+    n_fft: !ref <n_fft>
+    n_mels: !ref <n_mels>
+
+enc: !new:speechbrain.lobes.models.CRDNN.CRDNN
+    input_shape: [null, null, !ref <n_mels>]
+    activation: !ref <activation>
+    dropout: !ref <dropout>
+    cnn_blocks: !ref <cnn_blocks>
+    cnn_channels: !ref <cnn_channels>
+    cnn_kernelsize: !ref <cnn_kernelsize>
+    time_pooling: True
+    rnn_layers: !ref <rnn_layers>
+    rnn_neurons: !ref <rnn_neurons>
+    rnn_bidirectional: !ref <rnn_bidirectional>
+    dnn_blocks: !ref <dnn_blocks>
+    dnn_neurons: !ref <dnn_neurons>
+
+emb: !new:speechbrain.nnet.embedding.Embedding
+    num_embeddings: !ref <output_neurons>
+    embedding_dim: !ref <emb_size>
+
+emb_scorer: !new:speechbrain.nnet.embedding.Embedding
+    num_embeddings: !ref <num_phones>
+    embedding_dim: !ref <dec_neurons>
+
+dec: !new:speechbrain.nnet.RNN.AttentionalRNNDecoder
+    enc_dim: !ref <dnn_neurons>
+    input_size: !ref <emb_size>
+    rnn_type: gru
+    attn_type: location
+    hidden_size: !ref <dec_neurons>
+    attn_dim: 256
+    num_layers: 1
+    scaling: 1.0
+    channels: 10
+    kernel_size: 100
+    re_init: True
+    dropout: 0.5
+
+dec_scorer: !new:speechbrain.nnet.RNN.AttentionalRNNDecoder
+    enc_dim: !ref <dnn_neurons>
+    input_size: !ref <emb_size>
+    rnn_type: gru
+    attn_type: location
+    hidden_size: !ref <dec_neurons>
+    attn_dim: 256
+    num_layers: 1
+    scaling: 1.0
+    channels: 10
+    kernel_size: 100
+    re_init: True
+    dropout: 0.5
+
+ctc_lin: !new:speechbrain.nnet.linear.Linear
+    input_size: !ref <dnn_neurons>
+    n_neurons: !ref <output_neurons>  # 39 phonemes + 1 blank
+
+seq_lin: !new:speechbrain.nnet.linear.Linear
+    input_size: !ref <dec_neurons>
+    n_neurons: !ref <output_neurons>  # 39 phonemes + 1 eos
+
+log_softmax: !new:speechbrain.nnet.activations.Softmax
+    apply_log: True
+
+ctc_cost: !name:speechbrain.nnet.losses.ctc_loss
+    blank_index: !ref <blank_index>
+
+seq_cost: !name:speechbrain.nnet.losses.nll_loss
+    label_smoothing: 0.1
+
+score_cost: !name:speechbrain.nnet.losses.mse_loss
+pcc: !name:torch.corrcoef
+
+scorer_nn: !new:speechbrain.nnet.containers.Sequential
+    input_shape: [null, null, !ref <dec_scorer_neurons>]
+    model: !new:speechbrain.lobes.models.VanillaNN.VanillaNN
+        input_shape: [null, null, !ref <dec_scorer_neurons>]
+        dnn_blocks: !ref <scorer_dnn_blocks>
+        dnn_neurons: !ref <scorer_dnn_neurons>
+        activation: !ref <activation>
+    bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+    activation_final: !new:torch.nn.ReLU
+
+scorer_similarity_nn: !new:speechbrain.nnet.containers.Sequential
+    input_shape: [ null, null, !ref <scorer_dnn_neurons> * 2 ]
+    model: !new:speechbrain.lobes.models.VanillaNN.VanillaNN
+        input_shape: [ null, null, !ref <scorer_dnn_neurons> * 2 ]
+        dnn_blocks: !ref <scorer_similarity_dnn_blocks>
+        dnn_neurons: !ref <scorer_similarity_dnn_neurons>
+        activation: !ref <activation>
+    bn1: !name:speechbrain.nnet.normalization.BatchNorm1d
+    linear: !new:speechbrain.nnet.linear.Linear
+        input_size: !ref <scorer_similarity_dnn_neurons>
+        n_neurons: 1
+    activation_final: !new:torch.nn.Hardtanh
+        min_val: 0.0
+        max_val: 1.0
+
+greedy_searcher: !new:speechbrain.decoders.seq2seq.S2SRNNGreedySearcher
+    embedding: !ref <emb>
+    decoder: !ref <dec>
+    linear: !ref <seq_lin>
+    bos_index: !ref <bos_index>
+    eos_index: !ref <eos_index>
+    min_decode_ratio: !ref <min_decode_ratio>
+    max_decode_ratio: !ref <max_decode_ratio>
+
+beam_searcher: !new:speechbrain.decoders.seq2seq.S2SRNNBeamSearcher
+    embedding: !ref <emb>
+    decoder: !ref <dec>
+    linear: !ref <seq_lin>
+    ctc_linear: !ref <ctc_lin>
+    bos_index: !ref <bos_index>
+    eos_index: !ref <eos_index>
+    blank_index: !ref <blank_index>
+    min_decode_ratio: !ref <min_decode_ratio>
+    max_decode_ratio: !ref <max_decode_ratio>
+    beam_size: !ref <beam_size>
+
+model: !new:torch.nn.ModuleList
+    - [!ref <enc>, !ref <emb>, !ref <dec>, !ref <ctc_lin>, !ref <seq_lin>]
+
+model_scorer: !new:torch.nn.ModuleList
+    - [!ref <scorer_nn>, !ref <emb_scorer>, !ref <scorer_similarity_nn>]
+
+asr_opt_class: !name:torch.optim.Adam
+    lr: !ref <lr>
+
+scorer_opt_class: !name:torch.optim.Adam
+    lr: !ref <lr_scorer>
+
+lr_annealing_asr: !new:speechbrain.nnet.schedulers.NewBobScheduler
+    initial_value: !ref <lr>
+    improvement_threshold: 0.0025
+    annealing_factor: 0.8
+    patient: 0
+
+lr_annealing_scorer: !new:speechbrain.nnet.schedulers.NewBobScheduler
+    initial_value: !ref <lr>
+    improvement_threshold: 0.0025
+    annealing_factor: 0.8
+    patient: 0
+
+modules:
+    feat_extractor: !ref <feat_extractor>
+    enc: !ref <enc>
+    emb: !ref <emb>
+    dec: !ref <dec>
+    ctc_lin: !ref <ctc_lin>
+    seq_lin: !ref <seq_lin>
+    normalize: !ref <normalize>
+    scorer_nn: !ref <scorer_nn>
+    dec_scorer: !ref <dec_scorer>
+    emb_scorer: !ref <emb_scorer>
+    scorer_similarity_nn: !ref <scorer_similarity_nn>
+
+checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
+    checkpoints_dir: !ref <save_folder>
+    recoverables:
+        model: !ref <model>
+        model_scorer: !ref <model_scorer>
+        normalize: !ref <normalize>
+        lr_annealing_asr: !ref <lr_annealing_asr>
+        lr_annealing_scorer: !ref <lr_annealing_scorer>
+        counter: !ref <epoch_counter>
+
+train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
+    save_file: !ref <train_log>
+
+score_stats_mse: !name:speechbrain.utils.metric_stats.MetricStats
+    metric: !name:speechbrain.nnet.losses.mse_loss
+
+score_stats_pcc: !name:speechbrain.utils.metric_stats.MetricStats
+    metric: !name:torch.corrcoef
+
+ctc_stats: !name:speechbrain.utils.metric_stats.MetricStats
+    metric: !name:speechbrain.nnet.losses.ctc_loss
+        blank_index: !ref <blank_index>
+        reduction: batch
+
+seq_stats: !name:speechbrain.utils.metric_stats.MetricStats
+    metric: !name:speechbrain.nnet.losses.nll_loss
+        label_smoothing: 0.1
+        reduction: batch
+
+scoring_stats_dist: !name:metric_utils.distance_scoring_stats.DistanceScoringStats
+
+pretrained_model: !new:speechbrain.utils.parameter_transfer.Pretrainer
+    loadables:
+        model: !ref <model>
+    paths:
+        model: !ref <best_model_folder>/model.ckpt
+
+pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
+    loadables:
+        model: !ref <model>
+        model_scorer: !ref <model_scorer>
+    paths:
+        model: !ref <best_model_folder>/model.ckpt
+        model_scorer: !ref <best_model_folder>/model_scorer.ckpt
