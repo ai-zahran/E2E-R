@@ -1,4 +1,6 @@
 # E2E-R
+[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/fine-tuning-self-supervised-learning-models/phone-level-pronunciation-scoring-on)](https://paperswithcode.com/sota/phone-level-pronunciation-scoring-on?p=fine-tuning-self-supervised-learning-models)
+
 Code for the article [Fine-tuning Self-Supervised Learning Models for End-to-End Pronunciation Scoring](https://ieeexplore.ieee.org/document/10255657).
 
 This library includes code for training an end-to-end pronunciation scoring model. 
